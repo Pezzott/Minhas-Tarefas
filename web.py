@@ -6,18 +6,11 @@ from tkcalendar import DateEntry
 import datetime
 import json
 import os
+import sqlite3
 
-# caminho  para o arquivo json das tarefas
-caminho_json_tarefas = "C:/Users/AFERR136/OneDrive - azureford/DEV PYTHON/INTERFACEGRAFICAS/MY-DAILY-TASKS/BACKUP-2"
-
-if not os.path.exists(caminho_json_tarefas):
-    os.makedirs(caminho_json_tarefas)
-
-# caminho para salvar as credenciais de login/senha
-caminho_credenciais = "C:/Users/AFERR136/OneDrive - azureford/DEV PYTHON/INTERFACEGRAFICAS/MY-DAILY-TASKS/CREDENCIAIS"
-
-if not os.path.exists(caminho_credenciais):
-    os.makedirs(caminho_credenciais)
+# Conexão com o banco de dados
+conexao = sqlite3.connect('meu_banco_de_dados.db')
+cursor = conexao.cursor()
 
 # Classe de tarefa
 class Tarefa:
@@ -40,22 +33,34 @@ class Tarefa:
         }
 
     @staticmethod
-    def salve_no_json(task, path):
-        with open(os.path.join(path, f"{task.task_id}.json"), 'w') as f:
-            json.dump(task.to_dict(), f, indent=4)
+    def salve_no_db(task):
+        cursor.execute('''
+        INSERT INTO MinhasTarefas (task_id, responsible, name, start_date, end_date, completed)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ''', (task.task_id, task.responsible, task.name, task.start_date, task.end_date, task.completed))
+        conexao.commit()
 
     @staticmethod
-    def carregue_tarefas_do_json(task_id, path):
-        try:
-            with open(os.path.join(path, f"{task_id}.json"), 'r') as f:
-                data = json.load(f)
-            return Tarefa(**data)
-        except FileNotFoundError:
-            return None
+    def carregue_tarefas_do_db(task_id):
+        cursor.execute('SELECT * FROM MinhasTarefas WHERE task_id = ?', (task_id,))
+        row = cursor.fetchone()
+        if row:
+            return Tarefa(*row)
+        return None
+   
+    @staticmethod
+    def atualizar_tarefa_no_db(task_id, responsible, name, start_date, end_date, completed):
+        cursor.execute('''
+        UPDATE MinhasTarefas
+        SET responsible = ?, name = ?, start_date = ?, end_date = ?, completed = ?
+        WHERE task_id = ?
+        ''', (responsible, name, start_date, end_date, completed, task_id))
+        conexao.commit()
 
     @staticmethod
-    def deletar_tarefas_do_json(task_id, path):
-        os.remove(os.path.join(path, f"{task_id}.json"))
+    def deletar_tarefas_do_db(task_id):
+        cursor.execute('DELETE FROM MinhasTarefas WHERE task_id = ?', (task_id,))
+        conexao.commit()
 
 # Classe de Login/Cadastro
 class JanelaLogin:
@@ -88,57 +93,33 @@ class JanelaLogin:
     def login(self):
         username = self.username_entry.get()
         password = self.password_entry.get()
-        user_caminho_credenciais = os.path.join(caminho_credenciais, f"{username}.json")
-
-        
-        if os.path.exists(user_caminho_credenciais):
-            with open(user_caminho_credenciais, 'r') as f:
-                user_credentials = json.load(f)
-         
-            if user_credentials.get("password") == password:
-                self.login_successful = True
-                messagebox.showinfo("Login", "Login bem-sucedido!")
-                self.top_level.destroy()  
-            else:
-              
-                reset_password = messagebox.askyesno("Senha Incorreta", "Senha incorreta. Deseja redefinir a senha?")
-                if reset_password:
-                    self.resetar_senha(username)
+        cursor.execute('SELECT * FROM credenciais_de_acesso WHERE login = ?', (username,))
+        user_credentials = cursor.fetchone()
+        if user_credentials and user_credentials[1] == password:
+            self.login_successful = True
+            messagebox.showinfo("Login", "Login bem-sucedido!")
+            self.top_level.destroy()
         else:
-            messagebox.showerror("Erro", "Usuário não encontrado.")
-
-    def resetar_senha(self, username):
-        # Solicita a nova senha
-        new_password = simpledialog.askstring("Redefinir Senha", "Digite a nova senha:", show="*")
-        if new_password:
-            self.salvar_credenciais(username, new_password)
-            messagebox.showinfo("Redefinição de Senha", "Sua senha foi redefinida com sucesso.")
-        else:
-            messagebox.showerror("Redefinição de Senha", "Redefinição de senha cancelada.")
+            messagebox.showerror("Erro", "Usuário ou senha incorretos.")
 
     def novo_cadastro(self):
         username = self.username_entry.get()
         password = self.password_entry.get()
-        user_caminho_credenciais = os.path.join(caminho_credenciais, f"{username}.json")
-
-        
-        if os.path.exists(user_caminho_credenciais):
-           
+        cursor.execute('SELECT * FROM credenciais_de_acesso WHERE login = ?', (username,))
+        if cursor.fetchone():
             mudar_senha = messagebox.askyesno("Usuário Existente", "Usuário já existe. Deseja trocar a senha?")
             if mudar_senha:
                 self.salvar_credenciais(username, password)
                 messagebox.showinfo("Cadastro", "Senha atualizada com sucesso.")
-                self.top_level.destroy()  
+                self.top_level.destroy()
         else:
             self.salvar_credenciais(username, password)
             messagebox.showinfo("Cadastro", "Usuário cadastrado com sucesso.")
-            self.top_level.destroy() 
+            self.top_level.destroy()
 
-    
     def salvar_credenciais(self, username, password):
-        user_caminho_credenciais = os.path.join(caminho_credenciais, f"{username}.json")
-        with open(user_caminho_credenciais, 'w') as f:
-            json.dump({"username": username, "password": password}, f, indent=4)
+        cursor.execute('REPLACE INTO credenciais_de_acesso (login, senha) VALUES (?, ?)', (username, password))
+        conexao.commit()
     
     def on_closing(self):
         if not self.login_successful:
@@ -213,77 +194,66 @@ class MeuApp(ctk.CTk):
         self.protocol("WM_DELETE_WINDOW", self.on_closing)  
 
     def load_tasks(self):
-      
+        # Limpa a lista de tarefas e labels
         for label in self.task_labels:
             label.destroy()
         self.tasks.clear()
         self.task_labels.clear()
 
-       
-        for filename in os.listdir(caminho_json_tarefas):
-            if filename.endswith(".json"):
-                task_id = filename.split(".")[0]
-                task = Tarefa.carregue_tarefas_do_json(task_id, caminho_json_tarefas)
-                if task:
-                    self.tasks.append(task)
-                    self.display_task(task)
+        # Carrega as tarefas do banco de dados
+        cursor.execute('SELECT * FROM MinhasTarefas')
+        rows = cursor.fetchall()
+        for i, row in enumerate(rows, start=1):
+            task = Tarefa(*row)
+            self.tasks.append(task)
+            for j, value in enumerate(row):
+                label = ctk.CTkLabel(self.table, text=value, anchor="w")
+                label.grid(row=i, column=j, sticky="nsew", padx=2, pady=2)
+                self.task_labels.append(label)
+            # Cria o status_label para a coluna de status, usando dados da tarefa atual
+            status_label = ctk.CTkLabel(self.table, text=row[-1], anchor="w", fg_color=("green" if row[-1] == "Concluído" else "red"))
+            status_label.grid(row=i, column=self.columns-1, sticky="nsew", padx=2, pady=2)
+            self.task_labels.append(status_label)
 
-    def display_task(self, task):
-        row = len(self.tasks)
-        data = task.to_dict()
-        for col, key in enumerate(data):
-            label = ctk.CTkLabel(self.table, text=str(data[key]), anchor="w")
-            label.grid(row=row, column=col, sticky="nsew", padx=2, pady=2)
-            self.task_labels.append(label)
+        for i in range(self.columns):
+            self.table.grid_columnconfigure(i, weight=1)
 
-       
-        status_label = ctk.CTkLabel(self.table, text=data["completed"], anchor="w", fg_color=("green" if data["completed"] == "Concluído" else "red"))
-        status_label.grid(row=row, column=self.columns-1, sticky="nsew", padx=2, pady=2)
-        self.task_labels.append(status_label)
-
-      
         for i in range(1, len(self.tasks) + 1):
             self.table.grid_rowconfigure(i, weight=0)
 
-    def add_task(self):
-       
-        task_window = TaskWindow(self, title="Adicionar Tarefa", save_path=caminho_json_tarefas)
-        self.wait_window(task_window.top_level)
 
-       
+    def add_task(self):
+        task_window = TaskWindow(self, title="Adicionar Tarefa")
+        self.wait_window(task_window.top_level)
         self.load_tasks()
 
     def update_task(self):
-        
         task_id = simpledialog.askstring("Atualizar Tarefa", "Digite o ID da tarefa que deseja atualizar:")
-        task = Tarefa.carregue_tarefas_do_json(task_id, caminho_json_tarefas)
+        task = Tarefa.carregue_tarefas_do_db(task_id)
         if task:
-            task_window = TaskWindow(self, title="Atualizar Tarefa", task=task, save_path=caminho_json_tarefas, update=True)
+            task_window = TaskWindow(self, title="Atualizar Tarefa", task=task, update=True)
             self.wait_window(task_window.top_level)
-
-           
             self.load_tasks()
         else:
             messagebox.showerror("Erro", "Tarefa não encontrada.")
 
-   
     def delete_task(self):
-      
         task_id = simpledialog.askstring("Excluir Tarefa", "Digite o ID da tarefa que deseja excluir:")
-        task = Tarefa.carregue_tarefas_do_json(task_id, caminho_json_tarefas)
+        task = Tarefa.carregue_tarefas_do_db(task_id)
         if task:
             confirm = messagebox.askyesno("Confirmar Exclusão", "Você tem certeza que deseja excluir esta tarefa?")
             if confirm:
-                Tarefa.deletar_tarefas_do_json(task_id, caminho_json_tarefas)
+                Tarefa.deletar_tarefas_do_db(task_id)
                 messagebox.showinfo("Sucesso", "Tarefa excluída com sucesso.")
                 self.load_tasks()
         else:
             messagebox.showerror("Erro", "Tarefa não encontrada.")
 
     def on_closing(self):
-       
+        # Fecha a conexão com o banco de dados antes de fechar a janela
+        cursor.close()
+        conexao.close()
         self.destroy()
-
 
 class TaskWindow:
     def __init__(self, parent, title, task=None, save_path="", update=False):
@@ -340,28 +310,27 @@ class TaskWindow:
         self.top_level.grab_set()
 
     def save_task(self):
-    
+        # Recupera os valores dos campos de texto
         data = {field: self.fields[field].get() for field in self.fields if field not in ["start_date", "end_date"]}
 
-  
+        # Formata as datas de início e fim
         data["start_date"] = self.fields["start_date"].get_date().strftime("%d/%m/%Y")
         data["end_date"] = self.fields["end_date"].get_date().strftime("%d/%m/%Y")
-
-
-        if self.update:
-            data["task_id"] = self.task.task_id
-        else:
         
+        if self.update:
+            # Atualiza a tarefa existente no banco de dados
+            Tarefa.atualizar_tarefa_no_db(self.task.task_id, data['responsible'], data['name'], data["start_date"], data["end_date"], data['completed'])
+        else:
             if not data["task_id"]:
                 messagebox.showerror("Erro", "O ID da tarefa é obrigatório.")
                 return
-
-   
-        self.task = Tarefa(**data)
-        Tarefa.salve_no_json(self.task, self.save_path)
-
+            # Cria uma nova instância de Tarefa e salva no banco de dados
+            nova_tarefa = Tarefa(**data)
+            Tarefa.salve_no_db(nova_tarefa)
+        
         messagebox.showinfo("Sucesso", f"Tarefa {'atualizada' if self.update else 'adicionada'} com sucesso.")
         self.top_level.destroy()
+
 
 if __name__ == "__main__":
     app = MeuApp()

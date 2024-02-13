@@ -1,0 +1,6 @@
+Dados SQL Server da google na nuvel
+
+user: sqliserver
+senha: Ihs@14253698
+
+nome da conexão: gen-lang-client-0863987467:us-central1:pezzott-2024
